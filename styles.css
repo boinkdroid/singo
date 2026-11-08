@@ -232,3 +232,5 @@ input::placeholder { color: var(--text-3); }
 @media (prefers-reduced-motion: reduce) {
   .btn, #toast { transition: none; }
 }
+
+.rows li.hint { padding: 14px 2px 4px; font-size: 13px; line-height: 1.45; color: var(--text-3); }

@@ -8,7 +8,9 @@ const REDIRECT_URI = (location.origin + location.pathname).replace(/index\.html$
 const MIN_SONGS = 40;
 const RECOMMENDED_SONGS = 75;
 const MAX_CARDS = 300;
+const COPY_TIP = "To use one anyway, open it in Spotify, select all the songs, and choose Add to playlist → New playlist. Then pick your copy here.";
 const FORBIDDEN_MSG = "Spotify won't share this playlist's songs with the app. Use a playlist you created (or copy this one into a new playlist of yours) and try again.";
+const forbidden = () => Object.assign(new Error(FORBIDDEN_MSG), { forbidden: true });
 
 // ---------------------------------------------------------------- utils
 const app = document.getElementById("app");
@@ -78,7 +80,9 @@ async function login() {
 function logout() {
   store.set("auth", null);
   state.me = null;
+  state.meId = null;
   state.playlists = null;
+  meRequest = null;
 }
 
 /** Finishes login when Spotify sends the browser back with ?code=… */
@@ -167,7 +171,7 @@ async function getPlaylist(id) {
   try {
     return await api(`/playlists/${id}`);
   } catch (e) {
-    if (e.status === 403 || e.status === 404) throw new Error(FORBIDDEN_MSG);
+    if (e.status === 403 || e.status === 404) throw forbidden();
     throw e;
   }
 }
@@ -206,13 +210,23 @@ async function playlistSongs(id) {
         next = `/playlists/${id}/tracks?limit=100`;
         continue;
       }
-      if (e.status === 403) throw new Error(FORBIDDEN_MSG);
+      if (e.status === 403) throw forbidden();
       throw e;
     }
   }
   const ids = new Set(), keys = new Set();
   return tracks.map(toSong).filter((s) => s && !ids.has(s.id) && !keys.has(matchKey(s)) && ids.add(s.id) && keys.add(matchKey(s)));
 }
+
+let meRequest = null;
+/** The signed-in user's Spotify profile, fetched once. */
+function getMe() {
+  meRequest ??= api("/me")
+    .then((me) => { state.me = me?.display_name || null; state.meId = me?.id || null; return me; })
+    .catch((e) => { meRequest = null; throw e; });
+  return meRequest;
+}
+const ownsPlaylist = (p) => !!state.meId && p?.owner?.id === state.meId;
 
 async function nowPlaying() {
   const data = await api("/me/player/currently-playing");
@@ -421,6 +435,7 @@ async function fontsReady() {
 // ---------------------------------------------------------------- state + router
 const state = {
   me: null,
+  meId: null,
   playlists: null,
   setup: null,       // { playlist, songs }
   hostTab: "songs",
@@ -543,7 +558,8 @@ async function viewPick() {
       <ul class="rows" id="pl-list"><li class="muted">Loading…</li></ul>
     </section>`;
   try {
-    state.playlists ??= await myPlaylists();
+    const [playlists] = await Promise.all([state.playlists ?? myPlaylists(), getMe()]);
+    state.playlists = playlists;
     renderPlaylistList("");
   } catch (e) {
     showError(e);
@@ -555,39 +571,66 @@ async function viewPick() {
 function renderPlaylistList(filter) {
   const list = $("#pl-list");
   if (!list || !state.playlists) return;
-  const items = state.playlists.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()));
-  list.innerHTML = items.length ? items.map((p) => {
+  // Only show playlists this user owns. Spotify blocks the app from reading anyone else's.
+  const mine = state.playlists.filter(ownsPlaylist);
+  const hidden = state.playlists.length - mine.length;
+  const items = mine.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()));
+  const hint = hidden
+    ? `<li class="hint">${hidden} playlist${hidden === 1 ? "" : "s"} made by other people ${hidden === 1 ? "is" : "are"} hidden. Spotify only lets Singo read playlists you created. ${COPY_TIP}</li>`
+    : "";
+  list.innerHTML = (items.length ? items.map((p) => {
     const n = trackCount(p);
     const short = n != null && n < MIN_SONGS;
     return `<li><a class="row${short ? " dim" : ""}" href="#/setup/${p.id}">
       ${playlistImage(p) ? `<img class="art" src="${esc(playlistImage(p))}" alt="" loading="lazy">` : `<span class="art"></span>`}
       <span class="grow"><b>${esc(p.name)}</b><small class="${short ? "warn" : ""}">${n == null ? esc(p.owner?.display_name || "") : `${n} songs${short ? " · too short" : ""}`}</small></span>
       <span class="chev">›</span></a></li>`;
-  }).join("") : `<li class="muted">No playlists found.</li>`;
+  }).join("") : `<li class="muted">No playlists of yours found.</li>`) + hint;
 }
 
 async function viewSetup(id) {
   if (!loggedIn()) { location.hash = "#/"; return; }
   const cached = state.playlists?.find((p) => p.id === id);
-  state.setup = { playlist: cached || null, songs: null };
+  state.setup = { playlist: cached || null, songs: null, notMine: false };
   renderSetup();
   try {
-    const playlist = cached || (await getPlaylist(id));
+    const [playlist] = await Promise.all([cached || getPlaylist(id), getMe()]);
     if (currentSetupId() !== id) return;
     state.setup.playlist = playlist;
+    // Spotify only lets this app read playlists the signed-in user owns, so stop here
+    // with an explanation instead of an error.
+    if (!ownsPlaylist(playlist)) {
+      state.setup.notMine = true;
+      return renderSetup();
+    }
     renderSetup();
     const songs = await playlistSongs(id);
     if (currentSetupId() !== id) return;
     state.setup.songs = songs;
     renderSetup();
   } catch (e) {
+    if (e.forbidden && currentSetupId() === id) {
+      state.setup.notMine = true;
+      return renderSetup();
+    }
     showError(e);
   }
 }
 const currentSetupId = () => location.hash.startsWith("#/setup/") ? location.hash.split("/")[2] : null;
 
 function renderSetup() {
-  const { playlist, songs } = state.setup;
+  const { playlist, songs, notMine } = state.setup;
+  if (notMine) {
+    app.innerHTML = `
+      ${back("#/pick")}
+      <section class="panel">
+        <h2>Singo can't use this playlist</h2>
+        <p>${playlist ? `“${esc(playlist.name)}” was made by ${esc(playlist.owner?.display_name || "someone else")}. ` : ""}Spotify only lets Singo read playlists you created yourself.</p>
+        <p>${COPY_TIP}</p>
+        <a class="btn ghost" href="#/pick">Pick another playlist</a>
+      </section>`;
+    return;
+  }
   const count = store.get("cardCount", 40);
   const freeSpace = store.get("freeSpace", true);
   const perCard = freeSpace ? 24 : 25;
@@ -949,5 +992,5 @@ try {
 }
 route();
 if (loggedIn()) {
-  api("/me").then((me) => { state.me = me?.display_name || null; if (!location.hash || location.hash === "#/") viewHome(); }).catch(() => {});
+  getMe().then(() => { if (!location.hash || location.hash === "#/") viewHome(); }).catch(() => {});
 }
