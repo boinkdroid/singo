@@ -234,3 +234,5 @@ input::placeholder { color: var(--text-3); }
 }
 
 .rows li.hint { padding: 14px 2px 4px; font-size: 13px; line-height: 1.45; color: var(--text-3); }
+.access-note { margin: 12px 0 4px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.45; color: var(--text-2, inherit); background: rgba(255, 179, 71, 0.12); border: 1px solid rgba(255, 179, 71, 0.35); }
+.access-note a { color: inherit; font-weight: 700; }

@@ -514,6 +514,7 @@ function viewHome() {
       ` : `
         <p>Connect Spotify to pull in your playlists.</p>
         <button class="btn" data-action="login">Connect Spotify</button>
+        <p class="access-note">⚠️ Singo is invite-only for now. Spotify only lets a few accounts sign in, so email <a href="mailto:catiecorley@gmail.com?subject=Singo%20access">catiecorley@gmail.com</a> with your Spotify email to get added before you connect.</p>
       `}
       <button class="btn ghost" data-action="demo">Try a demo game (fake songs)</button>
     </section>
